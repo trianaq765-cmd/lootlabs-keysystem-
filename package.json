@@ -1,0 +1,20 @@
+{
+  "name": "lootlabs-keysystem",
+  "version": "1.0.0",
+  "description": "Key System with LootLabs for Roblox Scripts",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": "18.x"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "@cyclic.sh/s3fs": "^1.1.1"
+  },
+  "keywords": ["roblox", "key-system", "lootlabs"],
+  "author": "YourName",
+  "license": "MIT"
+}
