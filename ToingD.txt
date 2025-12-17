@@ -1,0 +1,1778 @@
+if getgenv().UHCore then pcall(function() if getgenv().UHCore.StopAll then getgenv().UHCore.StopAll() end end) end
+getgenv().UHCore = nil
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+local PersistentState = {
+    SpeedEnabled = false,
+    SpeedValue = 16
+}
+
+local S = {
+    Plr = {
+        SP = 16,
+        SO = false
+    },
+    Kil = {
+        AD = 15,
+        AO = false,
+        AB = false
+    },
+    Aim = {
+        M = nil,
+        TP = "Head",
+        SK = true,
+        SH = true,
+        SC = true,
+        SB = true,
+        AAO = false,
+        AAD = 50,
+        AAS = 0.5,
+        ABO = false,
+        ABD = 50,
+        ABS = 0.8,
+        SIO = false,
+        SID = 30
+    },
+    ESP = {
+        KO = false,
+        SO = false,
+        GO = false,
+        PO = false,
+        FT = 0.8,
+        OT = 0.3,
+        SD = true,
+        DC = Color3.fromRGB(255, 255, 255)
+    },
+    Vis = {
+        NF = false,
+        FB = false,
+        CS = 12,
+        CG = 6,
+        CO = false,
+        CT = "Sniper",
+        CD = 3,
+        CTH = 2
+    },
+    Col = {
+        K = Color3.fromRGB(255, 80, 80),
+        SV = Color3.fromRGB(80, 255, 80),
+        PL = Color3.fromRGB(255, 200, 80),
+        GL = Color3.fromRGB(255, 80, 80),
+        GM = Color3.fromRGB(255, 200, 80),
+        GH = Color3.fromRGB(80, 255, 80),
+        CR = Color3.fromRGB(255, 255, 255),
+        CL = Color3.fromRGB(255, 0, 0)
+    },
+    Cam = {
+        Mode = "Default"
+    }
+}
+
+local CrosshairTypes = {"Sniper", "Weapon", "Dot"}
+local CameraModes = {"Default", "FirstPerson", "ThirdPerson"}
+
+local Connections = {}
+
+local function Disconnect(n)
+    if Connections[n] then
+        pcall(function()
+            Connections[n]:Disconnect()
+        end)
+        Connections[n] = nil
+    end
+end
+
+local function DisconnectAll()
+    for n in pairs(Connections) do
+        Disconnect(n)
+    end
+end
+
+-- ============================================
+-- LOBBY DETECTION SYSTEM
+-- ============================================
+local LobbyDetection = {
+    InGame = false,
+    FirstLoad = true,
+    MapCallbacks = {},
+    LoopRunning = false
+}
+
+function LobbyDetection:IsInLobby()
+    local lobbyFolder = Workspace:FindFirstChild("Lobby") or Workspace:FindFirstChild("lobby") or Workspace:FindFirstChild("LobbySpawn")
+    local mapFolder = Workspace:FindFirstChild("Map") or Workspace:FindFirstChild("map") or Workspace:FindFirstChild("GameMap") or Workspace:FindFirstChild("CurrentMap") or Workspace:FindFirstChild("ActiveMap")
+    
+    if lobbyFolder and not mapFolder then
+        return true
+    end
+    
+    local inGameAttr = LocalPlayer:GetAttribute("InGame") or LocalPlayer:GetAttribute("IsInGame") or LocalPlayer:GetAttribute("Playing") or LocalPlayer:GetAttribute("InRound")
+    if inGameAttr == false then
+        return true
+    end
+    if inGameAttr == true then
+        return false
+    end
+    
+    local character = LocalPlayer.Character
+    if character then
+        local charInGame = character:GetAttribute("InGame") or character:GetAttribute("Playing") or character:GetAttribute("InRound")
+        if charInGame == false then
+            return true
+        end
+        if charInGame == true then
+            return false
+        end
+    end
+    
+    local roundFolder = Workspace:FindFirstChild("Round") or Workspace:FindFirstChild("Game") or Workspace:FindFirstChild("Match")
+    local roundStatus = Workspace:FindFirstChild("RoundStarted") or Workspace:FindFirstChild("GameStarted")
+    
+    if roundStatus then
+        if roundStatus:IsA("BoolValue") then
+            if roundStatus.Value == false then
+                return true
+            elseif roundStatus.Value == true then
+                return false
+            end
+        end
+    end
+    
+    if LocalPlayer.Team then
+        local teamName = LocalPlayer.Team.Name:lower()
+        if teamName:find("lobby") or teamName:find("waiting") or teamName:find("spectator") then
+            return true
+        end
+        if teamName:find("survivor") or teamName:find("killer") or teamName:find("player") or teamName:find("playing") then
+            return false
+        end
+    end
+    
+    local RS = game:GetService("ReplicatedStorage")
+    local gameState = RS:FindFirstChild("GameState") or RS:FindFirstChild("RoundState") or RS:FindFirstChild("MatchState")
+    if gameState then
+        if gameState:IsA("StringValue") then
+            local stateVal = gameState.Value:lower()
+            if stateVal:find("lobby") or stateVal:find("waiting") or stateVal:find("intermission") then
+                return true
+            end
+            if stateVal:find("playing") or stateVal:find("ingame") or stateVal:find("started") or stateVal:find("round") then
+                return false
+            end
+        elseif gameState:IsA("BoolValue") then
+            return not gameState.Value
+        end
+    end
+    
+    if mapFolder then
+        return false
+    end
+    
+    return true
+end
+
+function LobbyDetection:CheckState()
+    local inLobby = self:IsInLobby()
+    if self.FirstLoad then
+        self.FirstLoad = false
+        self.InGame = not inLobby
+        return
+    end
+    if self.InGame and inLobby then
+        self.InGame = false
+        for name, callback in pairs(self.MapCallbacks) do
+            pcall(function() callback("ToLobby") end)
+        end
+    elseif not self.InGame and not inLobby then
+        self.InGame = true
+        for name, callback in pairs(self.MapCallbacks) do
+            pcall(function() callback("ToGame") end)
+        end
+    end
+end
+
+function LobbyDetection:OnMapChange(name, callback)
+    self.MapCallbacks[name] = callback
+end
+
+function LobbyDetection:RemoveMapChangeCallback(name)
+    self.MapCallbacks[name] = nil
+end
+
+function LobbyDetection:Start()
+    if self.LoopRunning then return end
+    self.LoopRunning = true
+    task.spawn(function()
+        while self.LoopRunning do
+            self:CheckState()
+            task.wait(2)
+        end
+    end)
+end
+
+function LobbyDetection:Stop()
+    self.LoopRunning = false
+end
+
+LobbyDetection:Start()
+
+local ESPObjects = {
+    Killer = {},
+    Survivor = {},
+    Generator = {},
+    Pallet = {}
+}
+
+local ESPCache = {
+    Generators = {},
+    Pallets = {},
+    LastGenScan = 0,
+    LastPalletScan = 0,
+    ScanInterval = 5
+}
+
+-- ============================================
+-- GENERATOR COLOR CACHE SYSTEM (NEW)
+-- ============================================
+local generatorColorCache = {}
+local generatorCacheTime = {}
+
+local function GetCharacter(p)
+    return p and p.Character
+end
+
+local function GetHumanoid(c)
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function GetRootPart(c)
+    return c and (c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Torso"))
+end
+
+local function IsAlive(p)
+    local c = GetCharacter(p)
+    if not c then return false end
+    local h = GetHumanoid(c)
+    return h and h.Health > 0
+end
+
+local function GetDistanceFromPlayer(pos)
+    local c = GetCharacter(LocalPlayer)
+    if not c then return nil end
+    local r = GetRootPart(c)
+    if not r then return nil end
+    return math.floor((r.Position - pos).Magnitude)
+end
+
+local PlayerState = {}
+
+function PlayerState:IsKnocked(p)
+    local c = GetCharacter(p)
+    if not c then return false end
+    local h = GetHumanoid(c)
+    if not h then return false end
+    if c:GetAttribute("Knocked") or c:GetAttribute("Downed") or c:GetAttribute("IsDowned") or c:GetAttribute("IsKnocked") or c:GetAttribute("Crawling") or c:GetAttribute("IsCrawling") then
+        return true
+    end
+    if h:GetAttribute("Knocked") or h:GetAttribute("Downed") or h:GetAttribute("IsDowned") then
+        return true
+    end
+    local st = h:GetState()
+    if st == Enum.HumanoidStateType.Dead or st == Enum.HumanoidStateType.Physics then
+        return true
+    end
+    return false
+end
+
+function PlayerState:IsHooked(p)
+    local c = GetCharacter(p)
+    if not c then return false end
+    if c:GetAttribute("Hooked") or c:GetAttribute("IsHooked") then
+        return true
+    end
+    return false
+end
+
+function PlayerState:IsCarrying(p)
+    local c = GetCharacter(p)
+    if not c then return false end
+    if c:GetAttribute("Carrying") or c:GetAttribute("IsCarrying") then
+        return true
+    end
+    return false
+end
+
+function PlayerState:IsBeingCarried(p)
+    local c = GetCharacter(p)
+    if not c then return false end
+    if c:GetAttribute("BeingCarried") or c:GetAttribute("Carried") then
+        return true
+    end
+    return false
+end
+
+function PlayerState:CanAimAt(t)
+    if not t or t == LocalPlayer then return false end
+    if not IsAlive(t) then return false end
+    if S.Aim.SK and self:IsKnocked(t) then return false end
+    if S.Aim.SH and self:IsHooked(t) then return false end
+    if self:IsBeingCarried(t) then return false end
+    return true
+end
+
+function PlayerState:CanLocalPlayerAim()
+    local c = GetCharacter(LocalPlayer)
+    if not c then return false end
+    local h = GetHumanoid(c)
+    if not h or h.Health <= 0 then return false end
+    if self:IsKnocked(LocalPlayer) then return false end
+    if S.Aim.SC and self:IsCarrying(LocalPlayer) then return false end
+    if S.Aim.SB and self:IsBeingCarried(LocalPlayer) then return false end
+    return true
+end
+
+local function GetPlayerRole(p)
+    local c = GetCharacter(p)
+    if not c then return nil end
+    local r = c:GetAttribute("Role") or c:GetAttribute("PlayerRole")
+    if r then
+        local rs = tostring(r):lower()
+        if rs:find("killer") or rs:find("monster") then
+            return "Killer"
+        end
+        if rs:find("survivor") or rs:find("victim") then
+            return "Survivor"
+        end
+    end
+    if p.Team then
+        local tn = p.Team.Name:lower()
+        if tn:find("killer") then
+            return "Killer"
+        end
+        if tn:find("survivor") then
+            return "Survivor"
+        end
+    end
+    if c:FindFirstChild("Weapon") or c:FindFirstChild("KillerWeapon") then
+        return "Killer"
+    end
+    return nil
+end
+
+local function IsValidAimTarget(p)
+    if not PlayerState:CanAimAt(p) then return false end
+    if S.Aim.M then
+        if GetPlayerRole(p) ~= S.Aim.M then return false end
+    end
+    return true
+end
+
+-- ============================================
+-- WALKSPEED SYSTEM
+-- ============================================
+local WalkspeedSystem = {
+    Enabled = false,
+    Speed = 16,
+    DefaultSpeed = 16,
+    LoopRunning = false
+}
+
+function WalkspeedSystem:CanApplySpeed()
+    local character = LocalPlayer.Character
+    if not character then return false end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return false end
+    if humanoid.Health <= 0 then return false end
+    local state = humanoid:GetState()
+    if state == Enum.HumanoidStateType.Dead then return false end
+    if state == Enum.HumanoidStateType.Physics then return false end
+    local isKnocked = character:GetAttribute("Knocked") or character:GetAttribute("Downed") or character:GetAttribute("IsDowned") or character:GetAttribute("IsKnocked") or character:GetAttribute("Crawling") or character:GetAttribute("IsCrawling")
+    if isKnocked == true then return false end
+    local humKnocked = humanoid:GetAttribute("Knocked") or humanoid:GetAttribute("Downed") or humanoid:GetAttribute("IsDowned")
+    if humKnocked == true then return false end
+    return true
+end
+
+function WalkspeedSystem:ApplySpeed()
+    if not self.Enabled then return end
+    local character = LocalPlayer.Character
+    if not character then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+    if self:CanApplySpeed() then
+        if humanoid.WalkSpeed ~= self.Speed then
+            humanoid.WalkSpeed = self.Speed
+        end
+    end
+end
+
+function WalkspeedSystem:SetupListener()
+    local character = LocalPlayer.Character
+    if not character then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+    Disconnect("Walkspeed_Changed")
+    Connections["Walkspeed_Changed"] = humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+        if self.Enabled and self:CanApplySpeed() then
+            task.defer(function()
+                if self.Enabled and self:CanApplySpeed() and humanoid and humanoid.Parent then
+                    if humanoid.WalkSpeed ~= self.Speed then
+                        humanoid.WalkSpeed = self.Speed
+                    end
+                end
+            end)
+        end
+    end)
+    task.defer(function()
+        self:ApplySpeed()
+    end)
+end
+
+function WalkspeedSystem:StartLoop()
+    if self.LoopRunning then return end
+    self.LoopRunning = true
+    task.spawn(function()
+        while self.Enabled do
+            self:ApplySpeed()
+            task.wait(0.15)
+        end
+        self.LoopRunning = false
+    end)
+end
+
+function WalkspeedSystem:Start()
+    if self.Enabled then return end
+    self.Enabled = true
+    S.Plr.SO = true
+    self.Speed = S.Plr.SP
+    PersistentState.SpeedEnabled = true
+    PersistentState.SpeedValue = self.Speed
+    self:SetupListener()
+    LobbyDetection:OnMapChange("WalkspeedSystem", function(direction)
+        if self.Enabled and direction == "ToGame" then
+            task.wait(1)
+            self:SetupListener()
+            self:ApplySpeed()
+        end
+    end)
+    Disconnect("Walkspeed_CharAdded")
+    Connections["Walkspeed_CharAdded"] = LocalPlayer.CharacterAdded:Connect(function(char)
+        if not self.Enabled then return end
+        task.wait(0.3)
+        local humanoid = char:WaitForChild("Humanoid", 5)
+        if humanoid and self.Enabled then
+            task.wait(0.2)
+            self:SetupListener()
+        end
+    end)
+    self:StartLoop()
+end
+
+function WalkspeedSystem:Stop()
+    self.Enabled = false
+    S.Plr.SO = false
+    PersistentState.SpeedEnabled = false
+    Disconnect("Walkspeed_Changed")
+    Disconnect("Walkspeed_CharAdded")
+    LobbyDetection:RemoveMapChangeCallback("WalkspeedSystem")
+    pcall(function()
+        local character = LocalPlayer.Character
+        if character then
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                humanoid.WalkSpeed = self.DefaultSpeed
+            end
+        end
+    end)
+end
+
+function WalkspeedSystem:SetSpeed(newSpeed)
+    self.Speed = math.clamp(newSpeed, 1, 500)
+    S.Plr.SP = self.Speed
+    PersistentState.SpeedValue = self.Speed
+    if self.Enabled then
+        self:ApplySpeed()
+    end
+    return self.Speed
+end
+
+function WalkspeedSystem:AddSpeed(amount)
+    return self:SetSpeed(self.Speed + amount)
+end
+
+function WalkspeedSystem:Apply()
+    if self.Enabled then
+        self.Speed = S.Plr.SP
+        self:ApplySpeed()
+    end
+end
+
+-- ============================================
+-- AIM SYSTEM
+-- ============================================
+local AimSystem = {
+    CurrentTarget = nil,
+    LockedTarget = nil
+}
+
+local SilentAimHooked = false
+local CachedSilentTarget = nil
+local CachedTargetPart = nil
+local LastCacheUpdate = 0
+
+function AimSystem:GetTargetPart(c)
+    if S.Aim.TP == "Head" then
+        return c:FindFirstChild("Head") or GetRootPart(c)
+    else
+        return GetRootPart(c)
+    end
+end
+
+function AimSystem:GetClosestPlayer(maxD)
+    if not PlayerState:CanLocalPlayerAim() then return nil end
+    local cp, cd = nil, maxD
+    local mc = GetCharacter(LocalPlayer)
+    if not mc then return nil end
+    local mr = GetRootPart(mc)
+    if not mr then return nil end
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and IsValidAimTarget(p) then
+            local c = GetCharacter(p)
+            if c then
+                local tp = self:GetTargetPart(c)
+                if tp then
+                    local d = (mr.Position - tp.Position).Magnitude
+                    if d < cd then
+                        cd = d
+                        cp = p
+                    end
+                end
+            end
+        end
+    end
+    return cp
+end
+
+function AimSystem:StartAutoAim()
+    if S.Aim.AAO then return end
+    S.Aim.AAO = true
+    Connections["AutoAim"] = RunService.RenderStepped:Connect(function()
+        if not S.Aim.AAO then return end
+        local t = self:GetClosestPlayer(S.Aim.AAD)
+        self.CurrentTarget = t
+        if t then
+            local c = GetCharacter(t)
+            if c then
+                local tp = self:GetTargetPart(c)
+                if tp then
+                    local tcf = CFrame.new(Camera.CFrame.Position, tp.Position)
+                    Camera.CFrame = Camera.CFrame:Lerp(tcf, S.Aim.AAS)
+                end
+            end
+        end
+    end)
+end
+
+function AimSystem:StopAutoAim()
+    S.Aim.AAO = false
+    self.CurrentTarget = nil
+    Disconnect("AutoAim")
+end
+
+function AimSystem:StartAimbot()
+    if S.Aim.ABO then return end
+    S.Aim.ABO = true
+    Connections["Aimbot"] = RunService.RenderStepped:Connect(function()
+        if not S.Aim.ABO then return end
+        local t = self:GetClosestPlayer(S.Aim.ABD)
+        self.LockedTarget = t
+        if t then
+            local c = GetCharacter(t)
+            if c then
+                local tp = self:GetTargetPart(c)
+                if tp then
+                    local tcf = CFrame.new(Camera.CFrame.Position, tp.Position)
+                    Camera.CFrame = Camera.CFrame:Lerp(tcf, S.Aim.ABS)
+                end
+            end
+        end
+    end)
+end
+
+function AimSystem:StopAimbot()
+    S.Aim.ABO = false
+    self.LockedTarget = nil
+    Disconnect("Aimbot")
+end
+
+function AimSystem:StartSilentAim()
+    if S.Aim.SIO then return end
+    S.Aim.SIO = true
+    Connections["SilentCache"] = RunService.Heartbeat:Connect(function()
+        if not S.Aim.SIO then return end
+        local now = tick()
+        if now - LastCacheUpdate < 0.1 then return end
+        LastCacheUpdate = now
+        local t = self:GetClosestPlayer(S.Aim.SID)
+        if t then
+            local c = GetCharacter(t)
+            if c then
+                CachedSilentTarget = t
+                CachedTargetPart = self:GetTargetPart(c)
+                return
+            end
+        end
+        CachedSilentTarget = nil
+        CachedTargetPart = nil
+    end)
+    if SilentAimHooked then return end
+    SilentAimHooked = true
+    pcall(function()
+        local old
+        old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+            local m = getnamecallmethod()
+            local a = {...}
+            if not S.Aim.SIO or not CachedTargetPart then
+                return old(self, unpack(a))
+            end
+            if m == "FindPartOnRayWithIgnoreList" or m == "FindPartOnRay" then
+                if typeof(a[1]) == "Ray" then
+                    local o = a[1].Origin
+                    local d = (CachedTargetPart.Position - o).Unit * 1000
+                    a[1] = Ray.new(o, d)
+                end
+            elseif m == "Raycast" then
+                if typeof(a[1]) == "Vector3" then
+                    a[2] = (CachedTargetPart.Position - a[1]).Unit * 1000
+                end
+            end
+            return old(self, unpack(a))
+        end))
+    end)
+end
+
+function AimSystem:StopSilentAim()
+    S.Aim.SIO = false
+    CachedSilentTarget = nil
+    CachedTargetPart = nil
+    Disconnect("SilentCache")
+end
+
+-- ============================================
+-- ESP CORE FUNCTIONS
+-- ============================================
+local function CreateHighlight(t, col)
+    if not t then return nil end
+    local ex = t:FindFirstChild("ESP_Highlight")
+    if ex then
+        ex.FillColor = col
+        ex.OutlineColor = col
+        ex.FillTransparency = S.ESP.FT
+        ex.OutlineTransparency = S.ESP.OT
+        return ex
+    end
+    local hl = Instance.new("Highlight")
+    hl.Name = "ESP_Highlight"
+    hl.FillColor = col
+    hl.OutlineColor = col
+    hl.FillTransparency = S.ESP.FT
+    hl.OutlineTransparency = S.ESP.OT
+    hl.Adornee = t
+    hl.Parent = t
+    return hl
+end
+
+local function CreateNameTag(c, n, col)
+    if not c then return nil end
+    local hd = c:FindFirstChild("Head")
+    if not hd then return nil end
+    local ex = hd:FindFirstChild("ESP_NameTag")
+    if ex then
+        local lb = ex:FindFirstChild("NameLabel")
+        local dl = ex:FindFirstChild("DistLabel")
+        if lb then
+            lb.Text = n
+            lb.TextColor3 = col
+        end
+        if dl and S.ESP.SD then
+            local dist = GetDistanceFromPlayer(hd.Position)
+            if dist then
+                dl.Text = dist .. "m"
+                dl.TextColor3 = S.ESP.DC
+                dl.Visible = true
+            else
+                dl.Visible = false
+            end
+        elseif dl then
+            dl.Visible = false
+        end
+        return ex
+    end
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "ESP_NameTag"
+    bb.Adornee = hd
+    bb.Size = UDim2.new(0, 100, 0, 40)
+    bb.StudsOffset = Vector3.new(0, 2.5, 0)
+    bb.AlwaysOnTop = true
+    local lb = Instance.new("TextLabel")
+    lb.Name = "NameLabel"
+    lb.Parent = bb
+    lb.Size = UDim2.new(1, 0, 0.55, 0)
+    lb.BackgroundTransparency = 1
+    lb.TextColor3 = col
+    lb.TextStrokeTransparency = 0.3
+    lb.TextStrokeColor3 = Color3.new(0, 0, 0)
+    lb.Text = n
+    lb.Font = Enum.Font.SourceSansBold
+    lb.TextSize = 14
+    local dl = Instance.new("TextLabel")
+    dl.Name = "DistLabel"
+    dl.Parent = bb
+    dl.Size = UDim2.new(1, 0, 0.45, 0)
+    dl.Position = UDim2.new(0, 0, 0.55, 0)
+    dl.BackgroundTransparency = 1
+    dl.TextColor3 = S.ESP.DC
+    dl.TextStrokeColor3 = Color3.new(0, 0, 0)
+    dl.TextStrokeTransparency = 0.3
+    dl.Font = Enum.Font.SourceSansBold
+    dl.TextSize = 13
+    local dist = GetDistanceFromPlayer(hd.Position)
+    if dist and S.ESP.SD then
+        dl.Text = dist .. "m"
+        dl.Visible = true
+    else
+        dl.Visible = false
+    end
+    bb.Parent = hd
+    return bb
+end
+
+local function RemoveESPFromTarget(t)
+    if not t then return end
+    pcall(function()
+        local hl = t:FindFirstChild("ESP_Highlight")
+        if hl then hl:Destroy() end
+        local hd = t:FindFirstChild("Head")
+        if hd then
+            local tg = hd:FindFirstChild("ESP_NameTag")
+            if tg then tg:Destroy() end
+        end
+    end)
+end
+
+-- ============================================
+-- KILLER ESP
+-- ============================================
+local KillerESPCleanedUp = false
+
+local function StartKillerESP()
+    if S.ESP.KO then return end
+    S.ESP.KO = true
+    KillerESPCleanedUp = false
+    local lu = 0
+    Connections["KillerESP"] = RunService.Heartbeat:Connect(function()
+        if not S.ESP.KO then return end
+        
+        if LobbyDetection:IsInLobby() then
+            if not KillerESPCleanedUp then
+                KillerESPCleanedUp = true
+                for _, p in pairs(Players:GetPlayers()) do
+                    if p ~= LocalPlayer then
+                        local c = GetCharacter(p)
+                        if c then
+                            RemoveESPFromTarget(c)
+                        end
+                    end
+                end
+            end
+            return
+        end
+        
+        KillerESPCleanedUp = false
+        
+        local now = tick()
+        if now - lu < 0.5 then return end
+        lu = now
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and GetPlayerRole(p) == "Killer" then
+                local c = GetCharacter(p)
+                if c then
+                    CreateHighlight(c, S.Col.K)
+                    CreateNameTag(c, p.Name, S.Col.K)
+                end
+            end
+        end
+    end)
+end
+
+local function StopKillerESP()
+    S.ESP.KO = false
+    KillerESPCleanedUp = false
+    Disconnect("KillerESP")
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            local c = GetCharacter(p)
+            if c then
+                RemoveESPFromTarget(c)
+            end
+        end
+    end
+end
+
+-- ============================================
+-- SURVIVOR ESP
+-- ============================================
+local SurvivorESPCleanedUp = false
+
+local function StartSurvivorESP()
+    if S.ESP.SO then return end
+    S.ESP.SO = true
+    SurvivorESPCleanedUp = false
+    local lu = 0
+    Connections["SurvivorESP"] = RunService.Heartbeat:Connect(function()
+        if not S.ESP.SO then return end
+        
+        if LobbyDetection:IsInLobby() then
+            if not SurvivorESPCleanedUp then
+                SurvivorESPCleanedUp = true
+                for _, p in pairs(Players:GetPlayers()) do
+                    if p ~= LocalPlayer then
+                        local c = GetCharacter(p)
+                        if c then
+                            RemoveESPFromTarget(c)
+                        end
+                    end
+                end
+            end
+            return
+        end
+        
+        SurvivorESPCleanedUp = false
+        
+        local now = tick()
+        if now - lu < 0.5 then return end
+        lu = now
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer then
+                local r = GetPlayerRole(p)
+                if r == "Survivor" or r == nil then
+                    local c = GetCharacter(p)
+                    if c then
+                        CreateHighlight(c, S.Col.SV)
+                        CreateNameTag(c, p.Name, S.Col.SV)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function StopSurvivorESP()
+    S.ESP.SO = false
+    SurvivorESPCleanedUp = false
+    Disconnect("SurvivorESP")
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            local c = GetCharacter(p)
+            if c then
+                RemoveESPFromTarget(c)
+            end
+        end
+    end
+end
+
+-- ============================================
+-- GENERATOR ESP - FIXED VERSION
+-- ============================================
+local function FindGenerators()
+    local now = tick()
+    if now - ESPCache.LastGenScan < ESPCache.ScanInterval and #ESPCache.Generators > 0 then
+        return ESPCache.Generators
+    end
+    ESPCache.Generators = {}
+    ESPCache.LastGenScan = now
+    for _, o in pairs(Workspace:GetDescendants()) do
+        local nm = o.Name:lower()
+        if nm:find("generator") or nm == "gen" then
+            if o:IsA("Model") or o:IsA("BasePart") then
+                table.insert(ESPCache.Generators, o)
+            end
+        end
+    end
+    return ESPCache.Generators
+end
+
+local function GetGenProgress(g)
+    if not g then return 0 end
+    
+    local progress = g:GetAttribute("Progress") 
+        or g:GetAttribute("RepairProgress") 
+        or g:GetAttribute("Completion") 
+        or g:GetAttribute("Power")
+        or g:GetAttribute("GenProgress")
+        or g:GetAttribute("GeneratorProgress")
+        or g:GetAttribute("Percent")
+        or g:GetAttribute("Percentage")
+    
+    if not progress then
+        for _, child in pairs(g:GetChildren()) do
+            if child:IsA("NumberValue") or child:IsA("IntValue") then
+                local childName = child.Name:lower()
+                if childName:find("progress") or childName:find("power") or childName:find("percent") or childName:find("completion") then
+                    progress = child.Value
+                    break
+                end
+            end
+        end
+    end
+    
+    if not progress then
+        for _, desc in pairs(g:GetDescendants()) do
+            if desc:IsA("NumberValue") or desc:IsA("IntValue") then
+                local descName = desc.Name:lower()
+                if descName:find("progress") or descName:find("power") or descName:find("percent") then
+                    progress = desc.Value
+                    break
+                end
+            end
+        end
+    end
+    
+    local pr = tonumber(progress) or 0
+    
+    if pr > 1 then
+        return math.min(pr, 100)
+    else
+        return pr * 100
+    end
+end
+
+local function GetGeneratorColor(generator)
+    if not generator then return S.Col.GL end
+    
+    local now = tick()
+    if generatorCacheTime[generator] and (now - generatorCacheTime[generator]) < 1 then
+        return generatorColorCache[generator] or S.Col.GL
+    end
+    
+    local color = S.Col.GL
+    local progress = GetGenProgress(generator)
+    
+    if progress >= 100 then
+        color = S.Col.GH
+    elseif progress >= 50 then
+        color = S.Col.GM
+    elseif progress > 0 then
+        color = S.Col.GL
+    else
+        local isComplete = generator:GetAttribute("Completed") 
+            or generator:GetAttribute("IsRepaired")
+            or generator:GetAttribute("Done")
+            or generator:GetAttribute("Finished")
+        if isComplete == true then 
+            color = S.Col.GH
+        end
+    end
+    
+    generatorColorCache[generator] = color
+    generatorCacheTime[generator] = now
+    return color
+end
+
+local function StartGenESP()
+    if S.ESP.GO then return end
+    S.ESP.GO = true
+    ESPCache.LastGenScan = 0
+    generatorColorCache = {}
+    generatorCacheTime = {}
+    
+    local lu = 0
+    Connections["GenESP"] = RunService.Heartbeat:Connect(function()
+        if not S.ESP.GO then return end
+        local now = tick()
+        if now - lu < 1 then return end
+        lu = now
+        
+        local gs = FindGenerators()
+        for _, g in pairs(gs) do
+            local t = g:IsA("Model") and g or g.Parent
+            if t and (t:IsA("Model") or t:IsA("BasePart")) then
+                local col = GetGeneratorColor(g)
+                CreateHighlight(t, col)
+            end
+        end
+    end)
+end
+
+local function StopGenESP()
+    S.ESP.GO = false
+    Disconnect("GenESP")
+    for _, g in pairs(ESPCache.Generators) do
+        local t = g:IsA("Model") and g or g.Parent
+        if t then
+            local hl = t:FindFirstChild("ESP_Highlight")
+            if hl then hl:Destroy() end
+        end
+    end
+    ESPCache.Generators = {}
+    generatorColorCache = {}
+    generatorCacheTime = {}
+end
+
+-- ============================================
+-- PALLET ESP
+-- ============================================
+local function FindPallets()
+    local now = tick()
+    if now - ESPCache.LastPalletScan < ESPCache.ScanInterval and #ESPCache.Pallets > 0 then
+        return ESPCache.Pallets
+    end
+    ESPCache.Pallets = {}
+    ESPCache.LastPalletScan = now
+    for _, o in pairs(Workspace:GetDescendants()) do
+        if o.Name == "Palletwrong" then
+            if o:IsA("Model") or o:IsA("BasePart") then
+                table.insert(ESPCache.Pallets, o)
+            end
+        end
+    end
+    return ESPCache.Pallets
+end
+
+local function StartPalletESP()
+    if S.ESP.PO then return end
+    S.ESP.PO = true
+    ESPCache.LastPalletScan = 0
+    local lu = 0
+    Connections["PalletESP"] = RunService.Heartbeat:Connect(function()
+        if not S.ESP.PO then return end
+        local now = tick()
+        if now - lu < 2 then return end
+        lu = now
+        local ps = FindPallets()
+        for _, p in pairs(ps) do
+            CreateHighlight(p, S.Col.PL)
+        end
+    end)
+end
+
+local function StopPalletESP()
+    S.ESP.PO = false
+    Disconnect("PalletESP")
+    for _, p in pairs(ESPCache.Pallets) do
+        local hl = p:FindFirstChild("ESP_Highlight")
+        if hl then hl:Destroy() end
+    end
+    ESPCache.Pallets = {}
+end
+
+-- ============================================
+-- VISUAL FUNCTIONS
+-- ============================================
+local OriginalFog = {}
+
+local function StartNoFog()
+    if S.Vis.NF then return end
+    S.Vis.NF = true
+    OriginalFog.FogEnd = Lighting.FogEnd
+    OriginalFog.FogStart = Lighting.FogStart
+    Lighting.FogEnd = 1000000
+    Lighting.FogStart = 1000000
+    for _, c in pairs(Lighting:GetChildren()) do
+        if c:IsA("Atmosphere") then
+            c.Density = 0
+        end
+    end
+end
+
+local function StopNoFog()
+    S.Vis.NF = false
+    if OriginalFog.FogEnd then
+        Lighting.FogEnd = OriginalFog.FogEnd
+    end
+    if OriginalFog.FogStart then
+        Lighting.FogStart = OriginalFog.FogStart
+    end
+end
+
+local function SetFullbright(e)
+    S.Vis.FB = e
+    if e then
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.GlobalShadows = false
+        Lighting.Ambient = Color3.fromRGB(178, 178, 178)
+    else
+        Lighting.Brightness = 1
+        Lighting.GlobalShadows = true
+        Lighting.Ambient = Color3.fromRGB(0, 0, 0)
+    end
+end
+
+local function StartAntiLag()
+    for _, o in pairs(Workspace:GetDescendants()) do
+        if o:IsA("ParticleEmitter") or o:IsA("Trail") or o:IsA("Smoke") or o:IsA("Fire") or o:IsA("Sparkles") then
+            o.Enabled = false
+        end
+        if o:IsA("Decal") and o.Name ~= "face" then
+            o.Transparency = 1
+        end
+    end
+    settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+end
+
+local function StopAntiLag()
+    settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic
+end
+
+-- ============================================
+-- KILLER FUNCTIONS
+-- ============================================
+local function StartAutoAttack()
+    if S.Kil.AO then return end
+    S.Kil.AO = true
+    Connections["AutoAttack"] = RunService.Heartbeat:Connect(function()
+        if not S.Kil.AO then return end
+        local mc = GetCharacter(LocalPlayer)
+        if not mc then return end
+        local mr = GetRootPart(mc)
+        if not mr then return end
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and IsAlive(p) then
+                local role = GetPlayerRole(p)
+                if role == "Survivor" or role == nil then
+                    local c = GetCharacter(p)
+                    if c then
+                        local r = GetRootPart(c)
+                        if r and (mr.Position - r.Position).Magnitude <= S.Kil.AD then
+                            local tl = mc:FindFirstChildOfClass("Tool")
+                            if tl then
+                                pcall(function() tl:Activate() end)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function StopAutoAttack()
+    S.Kil.AO = false
+    Disconnect("AutoAttack")
+end
+
+local function StartAntiBlind()
+    if S.Kil.AB then return end
+    S.Kil.AB = true
+    Connections["AntiBlind"] = RunService.RenderStepped:Connect(function()
+        if not S.Kil.AB then return end
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        if pg then
+            for _, g in pairs(pg:GetDescendants()) do
+                if g:IsA("Frame") or g:IsA("ImageLabel") then
+                    local gn = g.Name:lower()
+                    if gn:find("blind") or gn:find("flash") or gn:find("stun") then
+                        g.Visible = false
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function StopAntiBlind()
+    S.Kil.AB = false
+    Disconnect("AntiBlind")
+end
+
+-- ============================================
+-- CAMERA SYSTEM
+-- ============================================
+local OriginalCam = {}
+
+local function HideCharacter(h)
+    local c = GetCharacter(LocalPlayer)
+    if not c then return end
+    for _, p in pairs(c:GetDescendants()) do
+        if p:IsA("BasePart") then
+            p.LocalTransparencyModifier = h and 1 or 0
+        elseif p:IsA("Decal") then
+            p.Transparency = h and 1 or 0
+        end
+    end
+end
+
+local function SetCameraMode(m)
+    S.Cam.Mode = m
+    if not OriginalCam.Mode then
+        OriginalCam.Mode = LocalPlayer.CameraMode
+        OriginalCam.MinZoom = LocalPlayer.CameraMinZoomDistance
+        OriginalCam.MaxZoom = LocalPlayer.CameraMaxZoomDistance
+    end
+    Disconnect("CameraFP")
+    Disconnect("CameraFPRender")
+    if m == "FirstPerson" then
+        LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
+        LocalPlayer.CameraMinZoomDistance = 0
+        LocalPlayer.CameraMaxZoomDistance = 0.5
+        HideCharacter(true)
+        Connections["CameraFPRender"] = RunService.RenderStepped:Connect(function()
+            if S.Cam.Mode == "FirstPerson" then
+                HideCharacter(true)
+            end
+        end)
+    elseif m == "ThirdPerson" then
+        LocalPlayer.CameraMode = Enum.CameraMode.Classic
+        LocalPlayer.CameraMinZoomDistance = 10
+        LocalPlayer.CameraMaxZoomDistance = 50
+        HideCharacter(false)
+    else
+        LocalPlayer.CameraMode = OriginalCam.Mode or Enum.CameraMode.Classic
+        LocalPlayer.CameraMinZoomDistance = OriginalCam.MinZoom or 0.5
+        LocalPlayer.CameraMaxZoomDistance = OriginalCam.MaxZoom or 15
+        HideCharacter(false)
+    end
+end
+
+-- ============================================
+-- CROSSHAIR SYSTEM
+-- ============================================
+local CrosshairSystem = {
+    Enabled = false,
+    Drawings = {},
+    RenderConnection = nil,
+    DrawingAvailable = false
+}
+
+local function CheckDrawingAPI()
+    local success, result = pcall(function()
+        if Drawing and Drawing.new then
+            local test = Drawing.new("Line")
+            if test then
+                test:Remove()
+                return true
+            end
+        end
+        return false
+    end)
+    return success and result
+end
+
+CrosshairSystem.DrawingAvailable = CheckDrawingAPI()
+
+function CrosshairSystem:CleanupDrawings()
+    for _, drawing in pairs(self.Drawings) do
+        pcall(function()
+            if drawing then
+                drawing.Visible = false
+                drawing:Remove()
+            end
+        end)
+    end
+    self.Drawings = {}
+end
+
+function CrosshairSystem:CreateDrawings()
+    self:CleanupDrawings()
+    if not self.DrawingAvailable then
+        return false
+    end
+    local ctype = S.Vis.CT
+    local success = pcall(function()
+        if ctype == "Sniper" then
+            self.Drawings["Dot"] = Drawing.new("Circle")
+            self.Drawings["Dot"].Filled = true
+            self.Drawings["Dot"].Radius = S.Vis.CD
+            self.Drawings["Dot"].Color = S.Col.CR
+            self.Drawings["Dot"].Visible = true
+            self.Drawings["Dot"].Transparency = 1
+            self.Drawings["Top"] = Drawing.new("Line")
+            self.Drawings["Top"].Thickness = S.Vis.CTH
+            self.Drawings["Top"].Color = S.Col.CR
+            self.Drawings["Top"].Visible = true
+            self.Drawings["Top"].Transparency = 1
+            self.Drawings["Bottom"] = Drawing.new("Line")
+            self.Drawings["Bottom"].Thickness = S.Vis.CTH
+            self.Drawings["Bottom"].Color = S.Col.CR
+            self.Drawings["Bottom"].Visible = true
+            self.Drawings["Bottom"].Transparency = 1
+            self.Drawings["Left"] = Drawing.new("Line")
+            self.Drawings["Left"].Thickness = S.Vis.CTH
+            self.Drawings["Left"].Color = S.Col.CR
+            self.Drawings["Left"].Visible = true
+            self.Drawings["Left"].Transparency = 1
+            self.Drawings["Right"] = Drawing.new("Line")
+            self.Drawings["Right"].Thickness = S.Vis.CTH
+            self.Drawings["Right"].Color = S.Col.CR
+            self.Drawings["Right"].Visible = true
+            self.Drawings["Right"].Transparency = 1
+        elseif ctype == "Weapon" then
+            self.Drawings["Dot"] = Drawing.new("Circle")
+            self.Drawings["Dot"].Filled = true
+            self.Drawings["Dot"].Radius = S.Vis.CD
+            self.Drawings["Dot"].Color = S.Col.CR
+            self.Drawings["Dot"].Visible = true
+            self.Drawings["Dot"].Transparency = 1
+            self.Drawings["Circle"] = Drawing.new("Circle")
+            self.Drawings["Circle"].Filled = false
+            self.Drawings["Circle"].Thickness = S.Vis.CTH
+            self.Drawings["Circle"].Color = S.Col.CR
+            self.Drawings["Circle"].Visible = true
+            self.Drawings["Circle"].Transparency = 1
+            self.Drawings["Top"] = Drawing.new("Line")
+            self.Drawings["Top"].Thickness = S.Vis.CTH
+            self.Drawings["Top"].Color = S.Col.CR
+            self.Drawings["Top"].Visible = true
+            self.Drawings["Top"].Transparency = 1
+            self.Drawings["Bottom"] = Drawing.new("Line")
+            self.Drawings["Bottom"].Thickness = S.Vis.CTH
+            self.Drawings["Bottom"].Color = S.Col.CR
+            self.Drawings["Bottom"].Visible = true
+            self.Drawings["Bottom"].Transparency = 1
+            self.Drawings["Left"] = Drawing.new("Line")
+            self.Drawings["Left"].Thickness = S.Vis.CTH
+            self.Drawings["Left"].Color = S.Col.CR
+            self.Drawings["Left"].Visible = true
+            self.Drawings["Left"].Transparency = 1
+            self.Drawings["Right"] = Drawing.new("Line")
+            self.Drawings["Right"].Thickness = S.Vis.CTH
+            self.Drawings["Right"].Color = S.Col.CR
+            self.Drawings["Right"].Visible = true
+            self.Drawings["Right"].Transparency = 1
+        elseif ctype == "Dot" then
+            self.Drawings["Dot"] = Drawing.new("Circle")
+            self.Drawings["Dot"].Filled = true
+            self.Drawings["Dot"].Radius = S.Vis.CD + 1
+            self.Drawings["Dot"].Color = S.Col.CR
+            self.Drawings["Dot"].Visible = true
+            self.Drawings["Dot"].Transparency = 1
+        end
+    end)
+    if not success then
+        self:CleanupDrawings()
+        return false
+    end
+    return true
+end
+
+function CrosshairSystem:UpdatePositions()
+    if not self.Enabled then return end
+    local cam = Camera
+    if not cam then return end
+    local viewportSize = cam.ViewportSize
+    local centerX = viewportSize.X / 2
+    local centerY = viewportSize.Y / 2
+    local size = S.Vis.CS
+    local gap = S.Vis.CG
+    local thick = S.Vis.CTH
+    local dotSize = S.Vis.CD
+    local ctype = S.Vis.CT
+    local color = S.Col.CR
+    if AimSystem.LockedTarget or AimSystem.CurrentTarget then
+        color = S.Col.CL
+    end
+    pcall(function()
+        if ctype == "Sniper" then
+            if self.Drawings["Dot"] then
+                self.Drawings["Dot"].Position = Vector2.new(centerX, centerY)
+                self.Drawings["Dot"].Radius = dotSize
+                self.Drawings["Dot"].Color = color
+                self.Drawings["Dot"].Visible = true
+            end
+            if self.Drawings["Top"] then
+                self.Drawings["Top"].From = Vector2.new(centerX, centerY - gap - size)
+                self.Drawings["Top"].To = Vector2.new(centerX, centerY - gap)
+                self.Drawings["Top"].Thickness = thick
+                self.Drawings["Top"].Color = color
+                self.Drawings["Top"].Visible = true
+            end
+            if self.Drawings["Bottom"] then
+                self.Drawings["Bottom"].From = Vector2.new(centerX, centerY + gap)
+                self.Drawings["Bottom"].To = Vector2.new(centerX, centerY + gap + size)
+                self.Drawings["Bottom"].Thickness = thick
+                self.Drawings["Bottom"].Color = color
+                self.Drawings["Bottom"].Visible = true
+            end
+            if self.Drawings["Left"] then
+                self.Drawings["Left"].From = Vector2.new(centerX - gap - size, centerY)
+                self.Drawings["Left"].To = Vector2.new(centerX - gap, centerY)
+                self.Drawings["Left"].Thickness = thick
+                self.Drawings["Left"].Color = color
+                self.Drawings["Left"].Visible = true
+            end
+            if self.Drawings["Right"] then
+                self.Drawings["Right"].From = Vector2.new(centerX + gap, centerY)
+                self.Drawings["Right"].To = Vector2.new(centerX + gap + size, centerY)
+                self.Drawings["Right"].Thickness = thick
+                self.Drawings["Right"].Color = color
+                self.Drawings["Right"].Visible = true
+            end
+        elseif ctype == "Weapon" then
+            local circleRadius = gap + size / 2
+            local lineStart = circleRadius - 2
+            local lineEnd = gap
+            if self.Drawings["Dot"] then
+                self.Drawings["Dot"].Position = Vector2.new(centerX, centerY)
+                self.Drawings["Dot"].Radius = dotSize
+                self.Drawings["Dot"].Color = color
+                self.Drawings["Dot"].Visible = true
+            end
+            if self.Drawings["Circle"] then
+                self.Drawings["Circle"].Position = Vector2.new(centerX, centerY)
+                self.Drawings["Circle"].Radius = circleRadius
+                self.Drawings["Circle"].Thickness = thick
+                self.Drawings["Circle"].Color = color
+                self.Drawings["Circle"].Visible = true
+            end
+            if self.Drawings["Top"] then
+                self.Drawings["Top"].From = Vector2.new(centerX, centerY - lineStart)
+                self.Drawings["Top"].To = Vector2.new(centerX, centerY - lineEnd)
+                self.Drawings["Top"].Thickness = thick
+                self.Drawings["Top"].Color = color
+                self.Drawings["Top"].Visible = true
+            end
+            if self.Drawings["Bottom"] then
+                self.Drawings["Bottom"].From = Vector2.new(centerX, centerY + lineEnd)
+                self.Drawings["Bottom"].To = Vector2.new(centerX, centerY + lineStart)
+                self.Drawings["Bottom"].Thickness = thick
+                self.Drawings["Bottom"].Color = color
+                self.Drawings["Bottom"].Visible = true
+            end
+            if self.Drawings["Left"] then
+                self.Drawings["Left"].From = Vector2.new(centerX - lineStart, centerY)
+                self.Drawings["Left"].To = Vector2.new(centerX - lineEnd, centerY)
+                self.Drawings["Left"].Thickness = thick
+                self.Drawings["Left"].Color = color
+                self.Drawings["Left"].Visible = true
+            end
+            if self.Drawings["Right"] then
+                self.Drawings["Right"].From = Vector2.new(centerX + lineEnd, centerY)
+                self.Drawings["Right"].To = Vector2.new(centerX + lineStart, centerY)
+                self.Drawings["Right"].Thickness = thick
+                self.Drawings["Right"].Color = color
+                self.Drawings["Right"].Visible = true
+            end
+        elseif ctype == "Dot" then
+            if self.Drawings["Dot"] then
+                self.Drawings["Dot"].Position = Vector2.new(centerX, centerY)
+                self.Drawings["Dot"].Radius = dotSize + 1
+                self.Drawings["Dot"].Color = color
+                self.Drawings["Dot"].Visible = true
+            end
+        end
+    end)
+end
+
+function CrosshairSystem:Start()
+    if self.Enabled then return true end
+    self.DrawingAvailable = CheckDrawingAPI()
+    if not self.DrawingAvailable then
+        return false
+    end
+    local success = self:CreateDrawings()
+    if not success then
+        return false
+    end
+    self.Enabled = true
+    S.Vis.CO = true
+    self:UpdatePositions()
+    if self.RenderConnection then
+        pcall(function() self.RenderConnection:Disconnect() end)
+    end
+    self.RenderConnection = RunService.RenderStepped:Connect(function()
+        if self.Enabled then
+            self:UpdatePositions()
+        end
+    end)
+    Connections["Crosshair"] = self.RenderConnection
+    return true
+end
+
+function CrosshairSystem:Stop()
+    self.Enabled = false
+    S.Vis.CO = false
+    if self.RenderConnection then
+        pcall(function() self.RenderConnection:Disconnect() end)
+        self.RenderConnection = nil
+    end
+    Disconnect("Crosshair")
+    self:CleanupDrawings()
+end
+
+function CrosshairSystem:ChangeStyle(newStyle)
+    if not table.find(CrosshairTypes, newStyle) then return end
+    S.Vis.CT = newStyle
+    if self.Enabled then
+        self:CleanupDrawings()
+        self:CreateDrawings()
+        self:UpdatePositions()
+    end
+end
+
+local function StartCrosshair()
+    return CrosshairSystem:Start()
+end
+
+local function StopCrosshair()
+    CrosshairSystem:Stop()
+end
+
+-- ============================================
+-- UTILITY FUNCTIONS
+-- ============================================
+local function GetPlayerList()
+    local l = {}
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            table.insert(l, p.Name)
+        end
+    end
+    return l
+end
+
+local function TeleportTo(pn)
+    local t = Players:FindFirstChild(pn)
+    if not t then return end
+    local mc = GetCharacter(LocalPlayer)
+    local tc = GetCharacter(t)
+    if mc and tc then
+        local mr = GetRootPart(mc)
+        local tr = GetRootPart(tc)
+        if mr and tr then
+            mr.CFrame = tr.CFrame * CFrame.new(0, 0, 3)
+        end
+    end
+end
+
+local function Rejoin()
+    game:GetService("TeleportService"):Teleport(game.PlaceId, LocalPlayer)
+end
+
+local function LoadScript(u)
+    pcall(function()
+        loadstring(game:HttpGet(u))()
+    end)
+end
+
+-- ============================================
+-- COLOR SETTER FUNCTIONS
+-- ============================================
+local function RefreshESPColors()
+    if S.ESP.KO then
+        StopKillerESP()
+        task.wait(0.1)
+        StartKillerESP()
+    end
+    if S.ESP.SO then
+        StopSurvivorESP()
+        task.wait(0.1)
+        StartSurvivorESP()
+    end
+    if S.ESP.GO then
+        StopGenESP()
+        task.wait(0.1)
+        StartGenESP()
+    end
+    if S.ESP.PO then
+        StopPalletESP()
+        task.wait(0.1)
+        StartPalletESP()
+    end
+end
+
+local function StopAll()
+    StopKillerESP()
+    StopSurvivorESP()
+    StopGenESP()
+    StopPalletESP()
+    WalkspeedSystem:Stop()
+    AimSystem:StopAutoAim()
+    AimSystem:StopAimbot()
+    AimSystem:StopSilentAim()
+    StopCrosshair()
+    StopAutoAttack()
+    StopAntiBlind()
+    StopNoFog()
+    SetFullbright(false)
+    StopAntiLag()
+    SetCameraMode("Default")
+    LobbyDetection:Stop()
+    DisconnectAll()
+end
+
+local function SetESPFillTransparency(v)
+    S.ESP.FT = math.clamp(v, 0, 1)
+end
+
+local function SetESPOutlineTransparency(v)
+    S.ESP.OT = math.clamp(v, 0, 1)
+end
+
+local function SetESPShowDistance(v)
+    S.ESP.SD = v
+end
+
+local function SetESPDistanceColor(c)
+    S.ESP.DC = c
+end
+
+local function SetKillerColor(c)
+    S.Col.K = c
+end
+
+local function SetSurvivorColor(c)
+    S.Col.SV = c
+end
+
+local function SetPalletColor(c)
+    S.Col.PL = c
+end
+
+local function SetGenLowColor(c)
+    S.Col.GL = c
+end
+
+local function SetGenMidColor(c)
+    S.Col.GM = c
+end
+
+local function SetGenHighColor(c)
+    S.Col.GH = c
+end
+
+local function SetCrosshairColor(c)
+    S.Col.CR = c
+end
+
+local function SetCrosshairLockColor(c)
+    S.Col.CL = c
+end
+
+local function SetCrosshairSize(v)
+    S.Vis.CS = math.clamp(v, 5, 50)
+end
+
+local function SetCrosshairGap(v)
+    S.Vis.CG = math.clamp(v, 0, 30)
+end
+
+local function SetCrosshairDotSize(v)
+    S.Vis.CD = math.clamp(v, 1, 10)
+end
+
+local function SetCrosshairThickness(v)
+    S.Vis.CTH = math.clamp(v, 1, 10)
+end
+
+-- ============================================
+-- PLAYER REMOVING HANDLER
+-- ============================================
+Connections["PlayerRemoving"] = Players.PlayerRemoving:Connect(function(player)
+    if player ~= LocalPlayer then
+        local character = player.Character
+        if character then
+            RemoveESPFromTarget(character)
+        end
+    end
+end)
+
+for _, player in pairs(Players:GetPlayers()) do
+    if player ~= LocalPlayer then
+        pcall(function()
+            player.CharacterRemoving:Connect(function(character)
+                RemoveESPFromTarget(character)
+            end)
+        end)
+    end
+end
+
+Connections["PlayerAdded_CharRemove"] = Players.PlayerAdded:Connect(function(player)
+    if player ~= LocalPlayer then
+        pcall(function()
+            player.CharacterRemoving:Connect(function(character)
+                RemoveESPFromTarget(character)
+            end)
+        end)
+    end
+end)
+
+-- ============================================
+-- CORE EXPORT
+-- ============================================
+local Core = {
+    S = S,
+    CrosshairTypes = CrosshairTypes,
+    CameraModes = CameraModes,
+    CrosshairSystem = CrosshairSystem,
+    AimSystem = AimSystem,
+    WalkspeedSystem = WalkspeedSystem,
+    PlayerState = PlayerState,
+    LobbyDetection = LobbyDetection,
+    StartSpeed = function() WalkspeedSystem:Start() end,
+    StopSpeed = function() WalkspeedSystem:Stop() end,
+    ApplySpeed = function() WalkspeedSystem:Apply() end,
+    SetSpeed = function(v) return WalkspeedSystem:SetSpeed(v) end,
+    AddSpeed = function(v) return WalkspeedSystem:AddSpeed(v) end,
+    StartKillerESP = StartKillerESP,
+    StopKillerESP = StopKillerESP,
+    StartSurvivorESP = StartSurvivorESP,
+    StopSurvivorESP = StopSurvivorESP,
+    StartGenESP = StartGenESP,
+    StopGenESP = StopGenESP,
+    StartPalletESP = StartPalletESP,
+    StopPalletESP = StopPalletESP,
+    SetESPFillTransparency = SetESPFillTransparency,
+    SetESPOutlineTransparency = SetESPOutlineTransparency,
+    SetESPShowDistance = SetESPShowDistance,
+    SetESPDistanceColor = SetESPDistanceColor,
+    SetKillerColor = SetKillerColor,
+    SetSurvivorColor = SetSurvivorColor,
+    SetPalletColor = SetPalletColor,
+    SetGenLowColor = SetGenLowColor,
+    SetGenMidColor = SetGenMidColor,
+    SetGenHighColor = SetGenHighColor,
+    StartAutoAim = function() AimSystem:StartAutoAim() end,
+    StopAutoAim = function() AimSystem:StopAutoAim() end,
+    StartAimbot = function() AimSystem:StartAimbot() end,
+    StopAimbot = function() AimSystem:StopAimbot() end,
+    StartSilentAim = function() AimSystem:StartSilentAim() end,
+    StopSilentAim = function() AimSystem:StopSilentAim() end,
+    StartCrosshair = StartCrosshair,
+    StopCrosshair = StopCrosshair,
+    ChangeCrosshairStyle = function(style) CrosshairSystem:ChangeStyle(style) end,
+    SetCrosshairColor = SetCrosshairColor,
+    SetCrosshairLockColor = SetCrosshairLockColor,
+    SetCrosshairSize = SetCrosshairSize,
+    SetCrosshairGap = SetCrosshairGap,
+    SetCrosshairDotSize = SetCrosshairDotSize,
+    SetCrosshairThickness = SetCrosshairThickness,
+    StartNoFog = StartNoFog,
+    StopNoFog = StopNoFog,
+    SetFullbright = SetFullbright,
+    StartAntiLag = StartAntiLag,
+    StopAntiLag = StopAntiLag,
+    StartAutoAttack = StartAutoAttack,
+    StopAutoAttack = StopAutoAttack,
+    StartAntiBlind = StartAntiBlind,
+    StopAntiBlind = StopAntiBlind,
+    SetCameraMode = SetCameraMode,
+    GetPlayerList = GetPlayerList,
+    TeleportTo = TeleportTo,
+    Rejoin = Rejoin,
+    LoadScript = LoadScript,
+    RefreshESPColors = RefreshESPColors,
+    StopAll = StopAll
+}
+
+getgenv().UHCore = Core
+
+return Core
